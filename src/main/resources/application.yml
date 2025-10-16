@@ -1,0 +1,91 @@
+server:
+  port: 8084 # Port khác với Customer (8083) và Product (8082)
+
+spring:
+  application:
+    name: order-service
+
+  datasource:
+    url: jdbc:postgresql://localhost:5432/order_db # Cơ sở dữ liệu riêng cho Order Service
+    username: postgres
+    password: loi114
+    driver-class-name: org.postgresql.Driver
+    hikari:
+      maximum-pool-size: 10
+      minimum-idle: 5
+      connection-timeout: 30000
+
+  jpa:
+    hibernate:
+      ddl-auto: update
+    properties:
+      hibernate:
+        format_sql: true
+    show-sql: true
+
+  security:
+    oauth2:
+      resourceserver:
+        jwt:
+          issuer-uri: http://localhost:4321/realms/ecommerce-realm # Đồng bộ với Keycloak realm
+
+  data:
+    redis:
+      host: localhost
+      port: 6379
+      timeout: 60000
+      lettuce:
+        pool:
+          max-active: 8
+          max-idle: 8
+          min-idle: 0
+
+  kafka:
+    bootstrap-servers: localhost:9092 # Phase 5: Multi-broker, e.g., broker1:9092,broker2:9092
+    producer:
+      key-serializer: org.apache.kafka.common.serialization.StringSerializer
+      value-serializer: org.springframework.kafka.support.serializer.JsonSerializer
+      properties:
+        acks: all # Ensure durability (Phase 1.5)
+        retries: 3 # Handle transient errors
+        enable.idempotence: true # Prevent duplicates
+        batch.size: 16384 # Optimize throughput (Phase 4.2)
+        linger.ms: 1 # Low latency
+        compression.type: gzip # Added for efficiency (Phase 4.2)
+    consumer:
+      group-id: order-service-group # Match Java config
+      auto-offset-reset: latest # Process new messages only (Phase 1.5)
+      key-deserializer: org.apache.kafka.common.serialization.StringDeserializer
+      value-deserializer: org.springframework.kafka.support.serializer.JsonDeserializer
+      properties:
+        spring.json.trusted.packages: java.util.* # More secure (Phase 4.2)
+        max.poll.records: 100 # Optimize polling
+        enable.auto.commit: false # Manual acknowledgment (Phase 1.5)
+        session.timeout.ms: 10000 # Added timeout (Phase 4.2)
+        heartbeat.interval.ms: 3000 # Added heartbeat (Phase 4.2)
+
+  eureka:
+    client:
+      service-url:
+        defaultZone: http://localhost:8761/eureka/
+      enabled: true
+    instance:
+      prefer-ip-address: true
+      instance-id: ${spring.application.name}:${spring.cloud.client.ip-address}:${server.port}
+
+management:
+  endpoints:
+    web:
+      exposure:
+        include: health, info
+  endpoint:
+    health:
+      show-details: always
+
+logging:
+  level:
+    org.springframework.security: DEBUG
+    org.springframework.cloud: DEBUG
+    com.netflix.discovery: DEBUG
+    com.tlcn: DEBUG
+    org.keycloak: DEBUG
