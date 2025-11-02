@@ -1,76 +1,113 @@
 package com.tlcn.order_service.controller;
 
-import com.tlcn.order_service.dto.OrderRequestDTO;
-import com.tlcn.order_service.dto.OrderResponseDTO;
+import com.tlcn.order_service.dto.OrderDTO;
 import com.tlcn.order_service.dto.ResponseDTO;
-import com.tlcn.order_service.model.Status;
+import com.tlcn.order_service.model.Order;
+import com.tlcn.order_service.model.OrderItem;
 import com.tlcn.order_service.service.OrderService;
-import lombok.RequiredArgsConstructor;
+import jakarta.validation.Valid;
+import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.data.domain.Page;
+import org.springframework.data.domain.PageRequest;
+import org.springframework.data.domain.Pageable;
 import org.springframework.http.ResponseEntity;
 import org.springframework.security.access.prepost.PreAuthorize;
 import org.springframework.security.core.Authentication;
 import org.springframework.web.bind.annotation.*;
 
-import jakarta.validation.Valid;
-import java.util.List;
-import java.util.Map;
-
 @RestController
 @RequestMapping("/api/orders")
-@RequiredArgsConstructor
 public class OrderController {
-    private final OrderService orderService;
+
+    @Autowired
+    private OrderService orderService;
+
+    /* ===================== CUSTOMER APIs ===================== */
 
     @PostMapping
     @PreAuthorize("hasRole('CUSTOMER')")
-    public ResponseEntity<ResponseDTO<OrderResponseDTO>> createOrder(
-            @Valid @RequestBody OrderRequestDTO request,
+    public ResponseEntity<ResponseDTO<Order>> createOrder(
+            @Valid @RequestBody OrderDTO orderDTO,
             Authentication authentication) {
         String keycloakId = authentication.getName();
-        OrderResponseDTO response = orderService.createOrder(request, keycloakId);
-        return ResponseEntity.ok(new ResponseDTO<>(true, "Order created successfully", response));
+        Order order = orderService.createOrder(orderDTO, keycloakId);
+        return ResponseEntity.ok(new ResponseDTO<>(true, "Order created successfully", order));
     }
 
-    @PatchMapping("/{orderId}/status")
-    @PreAuthorize("hasAnyRole('CUSTOMER', 'VENDOR')")
-    public ResponseEntity<ResponseDTO<OrderResponseDTO>> updateOrderStatus(
-            @PathVariable Long orderId,
-            @RequestBody Map<String, String> statusUpdate,
+    @GetMapping("/{id}")
+    @PreAuthorize("hasRole('CUSTOMER')")
+    public ResponseEntity<ResponseDTO<Order>> getOrder(
+            @PathVariable Long id,
             Authentication authentication) {
         String keycloakId = authentication.getName();
-        if (statusUpdate.get("status") == null) {
-             throw new OrderService.CustomException("Status field is required");
-        }
-        Status newStatus = Status.valueOf(statusUpdate.get("status").toUpperCase());
-        OrderResponseDTO response = orderService.updateOrderStatus(orderId, newStatus, keycloakId);
-        return ResponseEntity.ok(new ResponseDTO<>(true, "Order status updated successfully", response));
-    }
-
-    @GetMapping("/{orderId}")
-    @PreAuthorize("hasAnyRole('CUSTOMER', 'VENDOR')")
-    public ResponseEntity<ResponseDTO<OrderResponseDTO>> getOrderDetails(
-            @PathVariable Long orderId,
-            Authentication authentication) {
-        String keycloakId = authentication.getName();
-        OrderResponseDTO order = orderService.getOrderDetails(orderId, keycloakId);
+        Order order = orderService.getOrder(id, keycloakId);
         return ResponseEntity.ok(new ResponseDTO<>(true, "Order retrieved successfully", order));
     }
 
-    @GetMapping("/customer/my")
+    @GetMapping
     @PreAuthorize("hasRole('CUSTOMER')")
-    public ResponseEntity<ResponseDTO<List<OrderResponseDTO>>> getOrdersByCustomerKeycloakId(
+    public ResponseEntity<ResponseDTO<Page<Order>>> getOrdersByCustomer(
+            @RequestParam(defaultValue = "0") int page,
+            @RequestParam(defaultValue = "10") int size,
             Authentication authentication) {
         String keycloakId = authentication.getName();
-        List<OrderResponseDTO> orders = orderService.getOrdersByCustomerKeycloakId(keycloakId);
-        return ResponseEntity.ok(new ResponseDTO<>(true, "Customer orders retrieved successfully", orders));
+        Pageable pageable = PageRequest.of(page, size);
+        Page<Order> orders = orderService.getOrdersByCustomer(keycloakId, pageable);
+        return ResponseEntity.ok(new ResponseDTO<>(true, "Orders retrieved successfully", orders));
     }
 
-    @GetMapping("/vendor/my")
-    @PreAuthorize("hasRole('VENDOR')")
-    public ResponseEntity<ResponseDTO<List<OrderResponseDTO>>> getOrdersByVendorKeycloakId(
+    @PutMapping("/cancel/{id}")
+    @PreAuthorize("hasRole('CUSTOMER')")
+    public ResponseEntity<ResponseDTO<Void>> cancelOrder(
+            @PathVariable Long id,
             Authentication authentication) {
         String keycloakId = authentication.getName();
-        List<OrderResponseDTO> orders = orderService.getOrdersByVendorKeycloakId(keycloakId);
-        return ResponseEntity.ok(new ResponseDTO<>(true, "Vendor orders retrieved successfully", orders));
+        orderService.cancelOrder(id, keycloakId);
+        return ResponseEntity.ok(new ResponseDTO<>(true, "Order cancelled successfully", null));
+    }
+
+    /* ===================== VENDOR APIs ===================== */
+
+    @GetMapping("/vendor/items")
+    @PreAuthorize("hasRole('VENDOR')")
+    public ResponseEntity<ResponseDTO<Page<OrderItem>>> getOrderItemsByVendor(
+            @RequestParam(defaultValue = "0") int page,
+            @RequestParam(defaultValue = "10") int size,
+            Authentication authentication) {
+        String keycloakId = authentication.getName();
+        Pageable pageable = PageRequest.of(page, size);
+        Page<OrderItem> items = orderService.getOrdersByVendor(keycloakId, pageable);
+        return ResponseEntity.ok(new ResponseDTO<>(true, "Vendor order items retrieved successfully", items));
+    }
+
+    @GetMapping("/vendor/items/{itemId}")
+    @PreAuthorize("hasRole('VENDOR')")
+    public ResponseEntity<ResponseDTO<OrderItem>> getVendorOrderItem(
+            @PathVariable Long itemId,
+            Authentication authentication) {
+        String keycloakId = authentication.getName();
+        OrderItem item = orderService.getVendorOrderItem(itemId, keycloakId);
+        return ResponseEntity.ok(new ResponseDTO<>(true, "Vendor order item retrieved successfully", item));
+    }
+
+    @PutMapping("/vendor/items/status/{itemId}")
+    @PreAuthorize("hasRole('VENDOR')")
+    public ResponseEntity<ResponseDTO<Void>> updateItemStatus(
+            @PathVariable Long itemId,
+            @RequestParam String status,
+            Authentication authentication) {
+        String keycloakId = authentication.getName();
+        orderService.updateItemStatus(itemId, keycloakId, status);
+        return ResponseEntity.ok(new ResponseDTO<>(true, "Item status updated successfully", null));
+    }
+
+    @PutMapping("/vendor/items/cancel/{itemId}")
+    @PreAuthorize("hasRole('VENDOR')")
+    public ResponseEntity<ResponseDTO<Void>> cancelVendorItem(
+            @PathVariable Long itemId,
+            Authentication authentication) {
+        String keycloakId = authentication.getName();
+        orderService.cancelVendorItem(itemId, keycloakId);
+        return ResponseEntity.ok(new ResponseDTO<>(true, "Vendor item cancelled successfully", null));
     }
 }

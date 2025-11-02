@@ -1,38 +1,62 @@
 package com.tlcn.order_service.model;
 
-import lombok.Data;
-import java.math.BigDecimal;
-import java.io.Serializable;
+import jakarta.persistence.*;
+import jakarta.validation.constraints.NotBlank;
+import lombok.Getter;
+import lombok.Setter;
+
+import java.time.LocalDateTime;
 import java.util.ArrayList;
 import java.util.List;
 
-@Data
-public class Cart implements Serializable {
-    private Long customerId; 
-    private List<CartItem> items = new ArrayList<>(); 
-    private BigDecimal totalAmount = BigDecimal.ZERO;
-    private Integer totalItemsQuantity = 0;
-    private Long lastUpdatedAt = System.currentTimeMillis();
+import com.fasterxml.jackson.annotation.JsonFormat;
+import com.fasterxml.jackson.annotation.JsonManagedReference;
+import com.fasterxml.jackson.databind.annotation.JsonDeserialize;
+import com.fasterxml.jackson.databind.annotation.JsonSerialize;
+import com.fasterxml.jackson.datatype.jsr310.deser.LocalDateTimeDeserializer;
+import com.fasterxml.jackson.datatype.jsr310.ser.LocalDateTimeSerializer;
 
-    public Cart(Long customerId) {
-        this.customerId = customerId;
+@Entity
+@Table(name = "carts")
+@Getter
+@Setter
+public class Cart {
+
+    @Id
+    @GeneratedValue(strategy = GenerationType.IDENTITY)
+    private Long id;
+
+    @NotBlank(message = "Keycloak ID is required")
+    @Column(name = "keycloak_id", unique = true, nullable = false) 
+    private String keycloakId;
+
+    @Column(name = "total_price", nullable = false)
+    private Double totalPrice = 0.0;
+    
+    @JsonFormat(shape = JsonFormat.Shape.STRING, pattern = "yyyy-MM-dd HH:mm:ss")
+    @JsonSerialize(using = LocalDateTimeSerializer.class)
+    @JsonDeserialize(using = LocalDateTimeDeserializer.class)
+    @Column(name = "created_at", nullable = false, updatable = false)
+    private LocalDateTime createdAt;
+
+    @JsonFormat(shape = JsonFormat.Shape.STRING, pattern = "yyyy-MM-dd HH:mm:ss")
+    @JsonSerialize(using = LocalDateTimeSerializer.class)
+    @JsonDeserialize(using = LocalDateTimeDeserializer.class)
+    @Column(name = "updated_at", nullable = false)
+    private LocalDateTime updatedAt;
+
+    @JsonManagedReference
+    @OneToMany(mappedBy = "cart", cascade = CascadeType.ALL, orphanRemoval = true)
+    private List<CartItem> cartItems = new ArrayList<>();
+
+    @PrePersist
+    protected void onCreate() {
+        createdAt = LocalDateTime.now();
+        updatedAt = LocalDateTime.now();
     }
     
-    public void recalculate() {
-        if (items == null || items.isEmpty()) {
-            this.totalAmount = BigDecimal.ZERO;
-            this.totalItemsQuantity = 0;
-            return;
-        }
-        
-        this.totalAmount = items.stream()
-            .map(item -> item.getPrice().multiply(BigDecimal.valueOf(item.getQuantity())))
-            .reduce(BigDecimal.ZERO, BigDecimal::add);
-
-        this.totalItemsQuantity = items.stream()
-            .mapToInt(CartItem::getQuantity)
-            .sum();
-            
-        this.lastUpdatedAt = System.currentTimeMillis();
+    @PreUpdate
+    protected void onUpdate() {
+        updatedAt = LocalDateTime.now();
     }
 }
