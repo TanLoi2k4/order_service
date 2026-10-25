@@ -36,16 +36,19 @@ public class SecurityConfig {
             .authorizeHttpRequests(auth -> auth
                 // Public endpoints (Swagger, Actuator, tài liệu API)
                 .requestMatchers(
-                    "/swagger-ui/**",
-                    "/v3/api-docs/**",
                     "/actuator/**"
                 ).permitAll()
 
+                .requestMatchers("/orders/internal/**").permitAll()
+
+                // Admin order endpoints — ADMIN and SUPER_ADMIN (match gateway + @PreAuthorize)
+                .requestMatchers("/orders/admin/**").hasAnyRole("ADMIN", "SUPER_ADMIN")
+
                 // Các endpoint giỏ hàng — chỉ CUSTOMER mới được truy cập
-                .requestMatchers("/api/cart/**").hasRole("CUSTOMER")
+                .requestMatchers("/cart/**").hasRole("CUSTOMER")
 
                 // Các endpoint order — CUSTOMER và VENDOR đều có quyền
-                .requestMatchers("/api/orders/**").hasAnyRole("CUSTOMER", "VENDOR")
+                .requestMatchers("/orders/**").hasAnyRole("CUSTOMER", "VENDOR")
 
                 // Mọi request khác đều yêu cầu xác thực
                 .anyRequest().authenticated()

@@ -1,8 +1,6 @@
 package com.tlcn.order_service.exception;
 
 import com.tlcn.order_service.dto.ResponseDTO;
-import com.tlcn.order_service.service.CartService;
-import com.tlcn.order_service.service.OrderService;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
 import org.springframework.security.access.AccessDeniedException;
@@ -10,35 +8,65 @@ import org.springframework.validation.FieldError;
 import org.springframework.web.bind.MethodArgumentNotValidException;
 import org.springframework.web.bind.annotation.ExceptionHandler;
 import org.springframework.web.bind.annotation.RestControllerAdvice;
+import lombok.extern.slf4j.Slf4j;
+import java.util.stream.Collectors;
 
 @RestControllerAdvice
+@Slf4j
 public class GlobalExceptionHandler {
 
-    @ExceptionHandler({CartService.CustomException.class, OrderService.CustomException.class})
-    public ResponseEntity<ResponseDTO<Void>> handleCustomException(Exception ex) {
-        return ResponseEntity.badRequest().body(new ResponseDTO<>(false, ex.getMessage(), null));
+    @ExceptionHandler(BusinessException.class)
+    public ResponseEntity<ResponseDTO<Void>> handleBusiness(BusinessException ex) {
+        HttpStatus status = ex.getStatus() != null ? ex.getStatus() : HttpStatus.INTERNAL_SERVER_ERROR;
+        if (status.is4xxClientError()) {
+            log.warn("BusinessException: code={} message={}", ex.getErrorCode(), ex.getMessage());
+        } else {
+            log.error("BusinessException: code={} message={}", ex.getErrorCode(), ex.getMessage());
+        }
+        return ResponseEntity.status(status).body(ResponseDTO.fail(ex.getMessage(), ex.getErrorCode()));
+    }
+
+    @ExceptionHandler(ResourceNotFoundException.class)
+    public ResponseEntity<ResponseDTO<Void>> handleNotFound(ResourceNotFoundException ex) {
+        log.warn("Resource not found: {}", ex.getMessage());
+        return ResponseEntity.status(HttpStatus.NOT_FOUND)
+            .body(ResponseDTO.fail(ex.getMessage(), "RESOURCE_NOT_FOUND"));
+    }
+
+    @ExceptionHandler(UnauthorizedException.class)
+    public ResponseEntity<ResponseDTO<Void>> handleUnauthorized(UnauthorizedException ex) {
+        log.warn("Unauthorized: {}", ex.getMessage());
+        return ResponseEntity.status(HttpStatus.UNAUTHORIZED)
+            .body(ResponseDTO.fail(ex.getMessage(), ex.getErrorCode() != null ? ex.getErrorCode() : "UNAUTHORIZED"));
+    }
+
+    @ExceptionHandler(ForbiddenException.class)
+    public ResponseEntity<ResponseDTO<Void>> handleForbidden(ForbiddenException ex) {
+        log.warn("Forbidden: {}", ex.getMessage());
+        return ResponseEntity.status(HttpStatus.FORBIDDEN)
+            .body(ResponseDTO.fail(ex.getMessage(), "FORBIDDEN"));
     }
 
     @ExceptionHandler(MethodArgumentNotValidException.class)
-    public ResponseEntity<ResponseDTO<Void>> handleValidationException(MethodArgumentNotValidException ex) {
-        StringBuilder errorMsg = new StringBuilder();
-        ex.getBindingResult().getAllErrors().forEach(error -> {
-            if (error instanceof FieldError) {
-                errorMsg.append(((FieldError) error).getField()).append(": ").append(error.getDefaultMessage()).append("; ");
-            }
-        });
-        return ResponseEntity.badRequest().body(new ResponseDTO<>(false, errorMsg.toString(), null));
+    public ResponseEntity<ResponseDTO<Void>> handleValidation(MethodArgumentNotValidException ex) {
+        String errors = ex.getBindingResult().getFieldErrors().stream()
+            .map(FieldError::getDefaultMessage)
+            .collect(Collectors.joining(", "));
+        log.warn("Validation failed: {}", errors);
+        return ResponseEntity.badRequest().body(ResponseDTO.fail(errors, "VALIDATION_ERROR"));
     }
 
     @ExceptionHandler(AccessDeniedException.class)
-    public ResponseEntity<ResponseDTO<Void>> handleAccessDeniedException(AccessDeniedException ex) {
+    public ResponseEntity<ResponseDTO<Void>> handleAccessDenied(AccessDeniedException ex) {
+        log.warn("Access denied: {}", ex.getMessage());
         return ResponseEntity.status(HttpStatus.FORBIDDEN)
-                .body(new ResponseDTO<>(false, "Access denied: User does not have CUSTOMER role or token is invalid", null));
+            .body(ResponseDTO.fail("Access denied: User does not have required role", "ACCESS_DENIED"));
     }
 
     @ExceptionHandler(Exception.class)
-    public ResponseEntity<ResponseDTO<Void>> handleGeneralException(Exception ex) {
+    public ResponseEntity<ResponseDTO<Void>> handleGeneral(Exception ex) {
+        log.error("Unexpected error: ", ex);
         return ResponseEntity.status(HttpStatus.INTERNAL_SERVER_ERROR)
-                .body(new ResponseDTO<>(false, "Internal error: " + ex.getMessage(), null));
+            .body(ResponseDTO.fail("Internal server error", "INTERNAL_ERROR"));
     }
 }

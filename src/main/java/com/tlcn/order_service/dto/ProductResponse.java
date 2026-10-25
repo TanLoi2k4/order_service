@@ -1,12 +1,12 @@
 package com.tlcn.order_service.dto;
 
+import com.fasterxml.jackson.annotation.JsonIgnoreProperties;
 import jakarta.validation.constraints.*;
-import lombok.Getter;
-import lombok.Setter;
+import lombok.Data;
 
-@Getter
-@Setter
-public class ProductDTO {
+@Data
+@JsonIgnoreProperties(ignoreUnknown = true)
+public class ProductResponse {
 
     @NotNull(message = "Product ID is required")
     private Long id;
@@ -18,9 +18,7 @@ public class ProductDTO {
     @Size(max = 500, message = "Description must not exceed 500 characters")
     private String description;
 
-    @NotBlank(message = "Category is required")
-    @Size(min = 1, max = 50, message = "Category must be between 1 and 50 characters")
-    private String category;
+    private CategoryInfo category;
 
     @NotNull(message = "Price is required")
     @Min(value = 0, message = "Price must be non-negative")
@@ -35,4 +33,15 @@ public class ProductDTO {
 
     @Size(max = 255, message = "Image URL must not exceed 255 characters")
     private String imageUrl;
+
+    public String getCategoryName() {
+        return category != null ? category.getName() : null;
+    }
+
+    @Data
+    @JsonIgnoreProperties(ignoreUnknown = true)
+    public static class CategoryInfo {
+        private Long id;
+        private String name;
+    }
 }

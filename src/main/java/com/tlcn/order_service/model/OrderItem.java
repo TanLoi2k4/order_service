@@ -1,74 +1,46 @@
 package com.tlcn.order_service.model;
 
-import jakarta.persistence.*;
-import jakarta.validation.constraints.Min;
-import jakarta.validation.constraints.NotBlank; 
-import lombok.Getter;
-import lombok.Setter;
-
-import java.time.LocalDateTime;
-
 import com.fasterxml.jackson.annotation.JsonBackReference;
-import com.fasterxml.jackson.annotation.JsonFormat;
-import com.fasterxml.jackson.annotation.JsonIgnore;
-import com.fasterxml.jackson.databind.annotation.JsonDeserialize;
-import com.fasterxml.jackson.databind.annotation.JsonSerialize;
-import com.fasterxml.jackson.datatype.jsr310.deser.LocalDateTimeDeserializer;
-import com.fasterxml.jackson.datatype.jsr310.ser.LocalDateTimeSerializer;
+import jakarta.persistence.*;
+import lombok.*;
+import java.math.BigDecimal;
+
+import com.tlcn.order_service.enums.OrderItemStatus;
 
 @Entity
-@Table(name = "order_items")
-@Getter
-@Setter
+@Table(
+    name = "order_items",
+    indexes = {
+        @Index(name = "idx_order_items_product_id", columnList = "product_id"),
+        @Index(name = "idx_order_items_sub_order_product", columnList = "sub_order_id, product_id")
+    }
+)
+@Getter 
+@Setter 
+@NoArgsConstructor 
+@AllArgsConstructor 
+@Builder
 public class OrderItem {
 
     @Id
     @GeneratedValue(strategy = GenerationType.IDENTITY)
     private Long id;
 
-    @JsonBackReference
     @ManyToOne(fetch = FetchType.LAZY)
-    @JoinColumn(name = "order_id", nullable = false)
-    private Order order;
-
-    @Column(name = "product_id", nullable = false)
-    private Long productId;
-
-    @Min(value = 1, message = "Quantity must be at least 1")
-    @Column(nullable = false)
-    private Integer quantity;
-
-    @Column(name = "unit_price", nullable = false)
-    private Double unitPrice;
-
-    @NotBlank(message = "Vendor Keycloak ID is required")
-    @Column(name = "vendor_keycloak_id", nullable = false)
-    private String vendorKeycloakId;
+    @JsonBackReference("subOrder-items")
+    @JoinColumn(name = "sub_order_id", nullable = false)
+    private SubOrder subOrder;
 
     @Enumerated(EnumType.STRING)
-    @Column(nullable = false)
-    private Status status = Status.PENDING; 
+    @Builder.Default
+    private OrderItemStatus status = OrderItemStatus.PENDING;
+    
+    private Long productId;
+    private Integer quantity;
 
-    @JsonFormat(shape = JsonFormat.Shape.STRING, pattern = "yyyy-MM-dd HH:mm:ss")
-    @Column(name = "created_at", nullable = false, updatable = false)
-    @JsonSerialize(using = LocalDateTimeSerializer.class)
-    @JsonDeserialize(using = LocalDateTimeDeserializer.class)
-    private LocalDateTime createdAt;
+    @Column(precision = 19, scale = 2)
+    private BigDecimal unitPrice; 
 
-    @JsonFormat(shape = JsonFormat.Shape.STRING, pattern = "yyyy-MM-dd HH:mm:ss")
-    @JsonSerialize(using = LocalDateTimeSerializer.class)
-    @JsonDeserialize(using = LocalDateTimeDeserializer.class)
-    @Column(name = "updated_at", nullable = false)
-    private LocalDateTime updatedAt;
-
-    @PrePersist
-    protected void onCreate() {
-        createdAt = LocalDateTime.now();
-        updatedAt = LocalDateTime.now();
-    }
-
-    @PreUpdate
-    protected void onUpdate() {
-        updatedAt = LocalDateTime.now();
-    }
+    @Column(precision = 19, scale = 2)
+    private BigDecimal lineTotal; 
 }

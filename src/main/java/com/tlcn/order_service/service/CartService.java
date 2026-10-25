@@ -1,175 +1,197 @@
 package com.tlcn.order_service.service;
 
-import com.tlcn.order_service.dto.CartDTO;
-import com.tlcn.order_service.dto.ProductDTO;
-import com.tlcn.order_service.dto.ProductResponseDTO;
+import com.tlcn.order_service.dto.CartRequest;
+import com.tlcn.order_service.dto.ProductResponse;
+import com.tlcn.order_service.exception.BusinessException;
+import com.tlcn.order_service.exception.ResourceNotFoundException;
 import com.tlcn.order_service.model.Cart;
 import com.tlcn.order_service.model.CartItem;
-import com.tlcn.order_service.repository.CartItemRepository;
 import com.tlcn.order_service.repository.CartRepository;
-import org.slf4j.Logger;
-import org.slf4j.LoggerFactory;
-import org.springframework.beans.factory.annotation.Autowired;
-import org.springframework.cloud.client.loadbalancer.LoadBalanced;
-import org.springframework.http.ResponseEntity;
+import lombok.RequiredArgsConstructor;
+import lombok.extern.slf4j.Slf4j;
+import org.springframework.http.HttpStatus;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
-import org.springframework.web.client.HttpClientErrorException;
-import org.springframework.web.client.RestTemplate;
+
+import java.math.BigDecimal;
+import java.util.Objects;
+import java.util.Optional;
 
 @Service
+@RequiredArgsConstructor
+@Slf4j
 public class CartService {
 
-    private static final Logger log = LoggerFactory.getLogger(CartService.class);
+    private final CartRepository cartRepository;
+    private final ProductLookupService productLookupService;
 
-    @Autowired
-    private CartRepository cartRepository;
-
-    @Autowired
-    private CartItemRepository cartItemRepository;
-
-    @Autowired
-    @LoadBalanced
-    private RestTemplate restTemplate;
-
-    public static class CustomException extends RuntimeException {
-        public CustomException(String message) {
-            super(message);
-        }
-    }
-
-    private ProductDTO getProduct(Long productId) {
-        try {
-            ResponseEntity<ProductResponseDTO> response = restTemplate.getForEntity(
-                "http://product-service/api/products/" + productId,
-                ProductResponseDTO.class);
-                
-            ProductResponseDTO responseBody = response.getBody();
-                
-            if (response.getStatusCode().isError() || responseBody == null || !responseBody.isSuccess() || responseBody.getData() == null) {
-                throw new CustomException("Failed to fetch product with ID: " + productId);
-            }
-            
-            return responseBody.getData();
-        } catch (HttpClientErrorException e) {
-            throw new CustomException("Error fetching product with ID: " + productId + 
-                " (HTTP " + e.getStatusCode() + ": " + e.getStatusText() + ")");
-        }
-    }
-
-    @Transactional
-    public Cart addToCart(CartDTO cartDTO, String keycloakId) {
-        // Gọi ProductService qua gateway để lấy thông tin sản phẩm
-        ProductDTO product = getProduct(cartDTO.getProductId());
-        if (product == null) {
-            throw new CustomException("Product not found with ID: " + cartDTO.getProductId());
-        }
-
-        // Kiểm tra stock, xử lý null
-        Integer stock = product.getStock();
-        if (stock == null) {
-            throw new CustomException("Stock information is missing for product ID: " + cartDTO.getProductId());
-        }
-        if (stock < cartDTO.getQuantity()) {
-            throw new CustomException("Insufficient stock for product ID: " + cartDTO.getProductId());
-        }
-
-        // Tìm hoặc tạo mới giỏ hàng
-        Cart cart = cartRepository.findByKeycloakId(keycloakId)
+    public Cart getOrCreateCart(String keycloakId) {
+        return cartRepository.findByKeycloakId(keycloakId)
             .orElseGet(() -> {
-                Cart newCart = new Cart();
-                newCart.setKeycloakId(keycloakId);
-                newCart.setTotalPrice(0.0);
+                Cart newCart = Cart.builder()
+                    .keycloakId(keycloakId)
+                    .totalPrice(BigDecimal.ZERO)
+                    .build();
                 return cartRepository.save(newCart);
             });
+    }
 
-        // Kiểm tra xem sản phẩm đã có trong giỏ hàng chưa
-        CartItem existingItem = cart.getCartItems().stream()
-            .filter(item -> item.getProductId().equals(cartDTO.getProductId()))
-            .findFirst()
-            .orElse(null);
+    @Transactional
+    public Cart addToCart(CartRequest request, String keycloakId) {
+        int requestedQuantity = requirePositiveQuantity(request.getQuantity());
 
-        if (existingItem != null) {
-            existingItem.setQuantity(existingItem.getQuantity() + cartDTO.getQuantity());
-            existingItem.setPrice(product.getPrice() * existingItem.getQuantity());
+        Cart cart = cartRepository.findByKeycloakIdWithLock(keycloakId)
+            .orElseGet(() -> cartRepository.save(Cart.builder()
+                .keycloakId(keycloakId)
+                .totalPrice(BigDecimal.ZERO)
+                .build()));
+
+        ProductResponse product = productLookupService.getProduct(request.getProductId());
+        BigDecimal unitPrice = unitPriceOf(product);
+
+        Optional<CartItem> existingItem = cart.getCartItems().stream()
+            .filter(item -> Objects.equals(item.getProductId(), request.getProductId()))
+            .findFirst();
+
+        if (existingItem.isPresent()) {
+            CartItem item = existingItem.get();
+            int currentQuantity = Optional.ofNullable(item.getQuantity()).orElse(0);
+            item.setQuantity(currentQuantity + requestedQuantity);
+            item.setVendorKeycloakId(product.getKeycloakId());
+            // Đơn giá / sản phẩm — không nhân theo số lượng
+            item.setPrice(unitPrice);
         } else {
-            CartItem cartItem = new CartItem();
-            cartItem.setCart(cart);
-            cartItem.setProductId(cartDTO.getProductId());
-            cartItem.setVendorKeycloakId(product.getKeycloakId());
-            cartItem.setQuantity(cartDTO.getQuantity());
-            cartItem.setPrice(product.getPrice() * cartDTO.getQuantity());
-            cart.getCartItems().add(cartItem);
+            CartItem newItem = CartItem.builder()
+                .cart(cart)
+                .productId(request.getProductId())
+                .vendorKeycloakId(product.getKeycloakId())
+                .quantity(requestedQuantity)
+                .price(unitPrice)
+                .build();
+            cart.getCartItems().add(newItem);
         }
 
-        // Cập nhật tổng giá
-        cart.setTotalPrice(cart.getCartItems().stream()
-            .mapToDouble(CartItem::getPrice)
-            .sum());
-
-        cart = cartRepository.save(cart);
-        log.info("Added product to cart: keycloakId={}, productId={}", keycloakId, cartDTO.getProductId());
-        return cart;
+        recalculateTotal(cart);
+        return cartRepository.save(cart);
     }
 
+    @Transactional
+    public Cart removeFromCart(Long productId, String keycloakId) {
+        Cart cart = cartRepository.findByKeycloakIdWithLock(keycloakId)
+            .orElseThrow(() -> new ResourceNotFoundException("Cart not found"));
+
+        cart.getCartItems().removeIf(item -> Objects.equals(item.getProductId(), productId));
+        recalculateTotal(cart);
+        return cartRepository.save(cart);
+    }
+
+    @Transactional
+    public Cart updateCartItem(CartRequest request, String keycloakId) {
+        int requestedQuantity = requirePositiveQuantity(request.getQuantity());
+
+        Cart cart = cartRepository.findByKeycloakIdWithLock(keycloakId)
+            .orElseThrow(() -> new ResourceNotFoundException("Cart not found"));
+
+        CartItem item = cart.getCartItems().stream()
+            .filter(i -> Objects.equals(i.getProductId(), request.getProductId()))
+            .findFirst()
+            .orElseThrow(() -> new ResourceNotFoundException(
+                "CartItem not found for productId=" + request.getProductId()));
+
+        ProductResponse product = productLookupService.getProduct(request.getProductId());
+
+        item.setQuantity(requestedQuantity);
+        item.setVendorKeycloakId(product.getKeycloakId());
+        // Đơn giá cố định theo sản phẩm; line total = price * quantity khi tính tổng
+        item.setPrice(unitPriceOf(product));
+
+        recalculateTotal(cart);
+        return cartRepository.save(cart);
+    }
+
+    /**
+     * Lấy giỏ và đồng bộ lại đơn giá từ product-service
+     * (sửa dữ liệu cũ từng lưu nhầm line total vào cột price).
+     */
+    @Transactional
     public Cart getCart(String keycloakId) {
-        Cart cart = cartRepository.findByKeycloakId(keycloakId)
-            .orElseThrow(() -> new CustomException("Cart not found for user: " + keycloakId));
-        log.info("Retrieved cart: keycloakId={}", keycloakId);
+        Cart cart = getOrCreateCart(keycloakId);
+        boolean changed = refreshUnitPrices(cart);
+        if (changed) {
+            recalculateTotal(cart);
+            return cartRepository.save(cart);
+        }
+        // Đảm bảo total khớp price * quantity kể cả khi đơn giá không đổi
+        BigDecimal expected = sumLineTotals(cart);
+        if (cart.getTotalPrice() == null || cart.getTotalPrice().compareTo(expected) != 0) {
+            cart.setTotalPrice(expected);
+            return cartRepository.save(cart);
+        }
         return cart;
     }
 
-    @Transactional
-    public Cart updateCartItem(String keycloakId, Long productId, Integer quantity) {
-        if (quantity < 1) {
-            throw new CustomException("Quantity must be at least 1");
+    private boolean refreshUnitPrices(Cart cart) {
+        boolean changed = false;
+        if (cart.getCartItems() == null) {
+            return false;
         }
-
-        Cart cart = getCart(keycloakId);
-        CartItem cartItem = cart.getCartItems().stream()
-            .filter(item -> item.getProductId().equals(productId))
-            .findFirst()
-            .orElseThrow(() -> new CustomException("Cart item not found for product ID: " + productId));
-
-        // Gọi ProductService để kiểm tra tồn kho
-        ProductDTO product = getProduct(productId);
-        if (product == null) {
-            throw new CustomException("Product not found with ID: " + productId);
+        for (CartItem item : cart.getCartItems()) {
+            if (item.getProductId() == null) {
+                continue;
+            }
+            try {
+                ProductResponse product = productLookupService.getProduct(item.getProductId());
+                BigDecimal unitPrice = unitPriceOf(product);
+                if (item.getPrice() == null || item.getPrice().compareTo(unitPrice) != 0) {
+                    item.setPrice(unitPrice);
+                    changed = true;
+                }
+                if (product.getKeycloakId() != null
+                    && !Objects.equals(item.getVendorKeycloakId(), product.getKeycloakId())) {
+                    item.setVendorKeycloakId(product.getKeycloakId());
+                    changed = true;
+                }
+            } catch (Exception ex) {
+                log.warn("Could not refresh unit price for productId={}: {}", item.getProductId(), ex.getMessage());
+            }
         }
-        Integer stock = product.getStock();
-        if (stock == null) {
-            throw new CustomException("Stock information is missing for product ID: " + productId);
-        }
-        if (stock < quantity) {
-            throw new CustomException("Insufficient stock for product ID: " + productId);
-        }
-
-        cartItem.setQuantity(quantity);
-        cartItem.setPrice(product.getPrice() * quantity);
-        cart.setTotalPrice(cart.getCartItems().stream()
-            .mapToDouble(CartItem::getPrice)
-            .sum());
-
-        cartItemRepository.save(cartItem);
-        cart = cartRepository.save(cart);
-        log.info("Updated cart item: keycloakId={}, productId={}, quantity={}", keycloakId, productId, quantity);
-        return cart;
+        return changed;
     }
 
-    @Transactional
-    public void removeCartItem(String keycloakId, Long productId) {
-        Cart cart = getCart(keycloakId);
-        CartItem cartItem = cart.getCartItems().stream()
-            .filter(item -> item.getProductId().equals(productId))
-            .findFirst()
-            .orElseThrow(() -> new CustomException("Cart item not found for product ID: " + productId));
+    private static int requirePositiveQuantity(Integer quantity) {
+        if (quantity == null || quantity <= 0) {
+            throw new BusinessException("Quantity must be greater than 0", HttpStatus.BAD_REQUEST, "INVALID_QUANTITY");
+        }
+        return quantity;
+    }
 
-        cart.getCartItems().remove(cartItem);
-        cart.setTotalPrice(cart.getCartItems().stream()
-            .mapToDouble(CartItem::getPrice)
-            .sum());
+    private static BigDecimal unitPriceOf(ProductResponse product) {
+        if (product.getPrice() == null) {
+            throw new BusinessException("Product price is missing", HttpStatus.BAD_REQUEST, "PRODUCT_PRICE_MISSING");
+        }
+        return BigDecimal.valueOf(product.getPrice());
+    }
 
-        cartRepository.save(cart);
-        log.info("Removed cart item: keycloakId={}, productId={}", keycloakId, productId);
+    /** Tổng giỏ = Σ (đơn giá × số lượng). */
+    private static void recalculateTotal(Cart cart) {
+        cart.setTotalPrice(sumLineTotals(cart));
+    }
+
+    private static BigDecimal sumLineTotals(Cart cart) {
+        if (cart.getCartItems() == null || cart.getCartItems().isEmpty()) {
+            return BigDecimal.ZERO;
+        }
+        return cart.getCartItems().stream()
+            .map(CartService::lineTotal)
+            .reduce(BigDecimal.ZERO, BigDecimal::add);
+    }
+
+    private static BigDecimal lineTotal(CartItem item) {
+        BigDecimal unit = Optional.ofNullable(item.getPrice()).orElse(BigDecimal.ZERO);
+        int qty = Optional.ofNullable(item.getQuantity()).orElse(0);
+        if (qty <= 0) {
+            return BigDecimal.ZERO;
+        }
+        return unit.multiply(BigDecimal.valueOf(qty));
     }
 }
